@@ -38,7 +38,40 @@ def fa_google_creds():
         pass
     return ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 
-# --- SJÁLFVIRK GPSLOGGER SINKUN ---
+# --- SÆKJA ÖLL GPS HNIT ÚR ÖLLUM GEOJSON SKRÁM Á DRIVE (FYLGI VEGINUM) ---
+def saekja_alla_gps_slod_ur_drive():
+    allir_punktar = []
+    try:
+        creds = fa_google_creds()
+        drive_service = build('drive', 'v3', credentials=creds)
+
+        # Sækjum allar skrár úr möppunni sem enda á .geojson
+        query = f"'{GPS_FOLDER_ID}' in parents and trashed = false"
+        results = drive_service.files().list(q=query, fields="files(id, name)", orderBy="name").execute()
+        files = results.get('files', [])
+
+        for file in files:
+            if file['name'].endswith('.geojson'):
+                request = drive_service.files().get_media(fileId=file['id'])
+                fh = io.BytesIO()
+                downloader = MediaIoBaseDownload(fh, request)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
+                fh.seek(0)
+                gogn = json.loads(fh.read().decode('utf-8'))
+                
+                for feature in gogn.get("features", []):
+                    geometry = feature.get("geometry", {})
+                    coords = geometry.get("coordinates", [])
+                    if len(coords) >= 2:
+                        # GeoJSON geymir [Lon, Lat], en Folium vill [Lat, Lon]
+                        allir_punktar.append([coords[1], coords[0]])
+    except Exception:
+        pass
+    return allir_punktar
+
+# --- SJÁLFVIRK GPSLOGGER SINKUN (GOOGLESHEETS) ---
 def athuga_og_uppfaera_gps():
     try:
         creds = fa_google_creds()
@@ -127,11 +160,7 @@ def saekja_gogn():
     creds = fa_google_creds()
     client = gspread.authorize(creds)
     sheet = client.open(SHEET_NAME).sheet1
-    df_raw = pd.DataFrame(sheet.get_all_records())
-    
-    # Hreinsa 0 og tóma reiti úr töflunni
-    df_raw = df_raw.replace([0, "0", 0.0], "")
-    return df_raw
+    return pd.DataFrame(sheet.get_all_records())
 
 df = saekja_gogn()
 
@@ -147,11 +176,16 @@ if not df.empty and "Lat" in df.columns and "Lon" in df.columns:
         
         m = folium.Map(location=[sidasta_lat, sidasta_lon], zoom_start=8)
         
-        # 1. TEIKNA LÍNU Á MILLI HNITA ÚR GOOGLE SHEETS
-        hnit_lista = df_kort[["Lat_num", "Lon_num"]].values.tolist()
-        folium.PolyLine(hnit_lista, color="blue", weight=4, opacity=0.8).add_to(m)
+        # 1. TEIKNA NÁKVÆMA AKSTURSLEIÐ ÚR DRIVEOLLUM GEOJSON (BLÁ LÍNA SEM FYLGIR VEGINUM)
+        nákvæm_akstursleid = saekja_alla_gps_slod_ur_drive()
+        if nákvæm_akstursleid:
+            folium.PolyLine(nákvæm_akstursleid, color="blue", weight=5, opacity=0.85).add_to(m)
+        else:
+            # Til vara ef drifið svarar ekki
+            hnit_lista = df_kort[["Lat_num", "Lon_num"]].values.tolist()
+            folium.PolyLine(hnit_lista, color="blue", weight=4, opacity=0.8).add_to(m)
         
-        # 2. RAUÐIR PRJÓNAR FYRIR ELDRI STAÐI
+        # 2. RAUÐIR PRJÓNAR FYRIR STÖÐVUNARSTAÐI ÚR DAGBÓKINNI
         for idx, row in df_kort.iloc[:-1].iterrows():
             mynd_html = ""
             if "Mynd" in row and row["Mynd"]:
@@ -200,10 +234,11 @@ if not df.empty and "Lat" in df.columns and "Lon" in df.columns:
 
 st.subheader("📖 Dagbók og veðurskráningar")
 
-# SNÚA TÖFLUNNI VIÐ SVO NÝJASTA SKRÁNINGIN SÉ EFST
+# SNÚA TÖFLUNNI VIÐ (NÝJASTA EFST) OG FELA VÍSATÖLUNA (0, 1, 2)
 if not df.empty:
-    # Taka út hjálpardálkana fyrir sýningu
     df_visun = df.drop(columns=["Lat_num", "Lon_num"], errors="ignore")
-    st.dataframe(df_visun.iloc[::-1].reset_index(drop=True), use_container_width=True)
+    # Fyllum tóm gildi svo þau sýni ekki nan eða 0
+    df_visun = df_visun.fillna("")
+    st.dataframe(df_visun.iloc[::-1].reset_index(drop=True), use_container_width=True, hide_index=True)
 else:
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(df, use_container_width=True, hide_index=True)
