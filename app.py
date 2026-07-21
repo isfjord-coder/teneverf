@@ -38,6 +38,34 @@ def fa_google_creds():
         pass
     return ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 
+# --- SÆKJA ÖLL GPS HNIT ÚR DRIVE (FYRIR KORTIÐ SEM FYLGIR VEGINUM) ---
+def saekja_alla_gps_slod():
+    allir_punktar = []
+    try:
+        creds = fa_google_creds()
+        drive_service = build('drive', 'v3', credentials=creds)
+
+        # Finna allar geojson skrár í möppunni
+        query = f"'{GPS_FOLDER_ID}' in parents and name endswith '.geojson' and trashed = false"
+        results = drive_service.files().list(q=query, fields="files(id, name)", orderBy="name").execute()
+        files = results.get('files', [])
+
+        for file in files:
+            request = drive_service.files().get_media(fileId=file['id'])
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            fh.seek(0)
+            gogn = json.loads(fh.read().decode('utf-8'))
+            for f in gogn.get("features", []):
+                coords = f["geometry"]["coordinates"]
+                allir_punktar.append([coords[1], coords[0]]) # Folium vill [Lat, Lon]
+    except Exception:
+        pass
+    return allir_punktar
+
 # --- SJÁLFVIRK GPSLOGGER SINKUN ---
 def athuga_og_uppfaera_gps():
     try:
@@ -61,7 +89,7 @@ def athuga_og_uppfaera_gps():
         fh = io.BytesIO()
         downloader = MediaIoBaseDownload(fh, request)
         done = False
-        while done is False:
+        while not done:
             _, done = downloader.next_chunk()
 
         fh.seek(0)
@@ -137,18 +165,22 @@ if not df.empty and "Lat" in df.columns and "Lon" in df.columns:
     df_kort = df.dropna(subset=["Lat", "Lon"])
 
     if not df_kort.empty:
-        # Nýjasta staðsetningin (síðasta línan)
         sidasta_lat = df_kort.iloc[-1]["Lat"]
         sidasta_lon = df_kort.iloc[-1]["Lon"]
         sidasti_stadur = df_kort.iloc[-1].get("Staður", "Núverandi staðsetning")
         
-        m = folium.Map(location=[sidasta_lat, sidasta_lon], zoom_start=9)
+        m = folium.Map(location=[sidasta_lat, sidasta_lon], zoom_start=8)
         
-        # Dregur línu á milli punktanna
-        hnit_lista = df_kort[["Lat", "Lon"]].values.tolist()
-        folium.PolyLine(hnit_lista, color="#E63946", weight=4, opacity=0.8).add_to(m)
+        # 1. SÆKJA OG TEIKNA NÁKVÆMA VEGALEIÐ ÚR GPSLOGGER (BLÁ LÍNA SKV. MYND)
+        gps_leid = saekja_alla_gps_slod()
+        if gps_leid:
+            folium.PolyLine(gps_leid, color="blue", weight=5, opacity=0.85).add_to(m)
+        else:
+            # Til vara ef drifið er hægt
+            hnit_lista = df_kort[["Lat", "Lon"]].values.tolist()
+            folium.PolyLine(hnit_lista, color="blue", weight=4, opacity=0.8).add_to(m)
         
-        # Bæta við öllum eldri punktum (Bláir prjónar)
+        # 2. PRJÓNAR FYRIR DAGBÓKARSAGANNA
         for idx, row in df_kort.iloc[:-1].iterrows():
             mynd_html = ""
             if "Mynd" in row and row["Mynd"]:
@@ -167,10 +199,10 @@ if not df.empty and "Lat" in df.columns and "Lon" in df.columns:
                 [row["Lat"], row["Lon"]],
                 popup=popup_text,
                 tooltip=f"{row.get('Staður', '')} ({row.get('Klukkan', '')})",
-                icon=folium.Icon(color="blue", icon="info-sign")
+                icon=folium.Icon(color="red", icon="flag")
             ).add_to(m)
             
-        # SÉRSTAKUR AÐSKILINN PRJÓN FYRIR NÚVERANDI STAÐSETNINGU (Grænn húsbíll)
+        # 3. NÚVERANDI STAÐSETNING (SÉRSTAKUR MARKER)
         nuna_row = df_kort.iloc[-1]
         mynd_html = ""
         if "Mynd" in nuna_row and nuna_row["Mynd"]:
@@ -190,10 +222,15 @@ if not df.empty and "Lat" in df.columns and "Lon" in df.columns:
             [sidasta_lat, sidasta_lon],
             popup=nuna_popup,
             tooltip=f"🚐 HÉR ERUÐ ÞIÐ NÚNA: {sidasti_stadur}",
-            icon=folium.Icon(color="green", icon="fa-bus", prefix="fa")
+            icon=folium.Icon(color="red", icon="flag")
         ).add_to(m)
             
         st_folium(m, width=1200, height=520)
 
 st.subheader("📖 Dagbók og veðurskráningar")
-st.dataframe(df, use_container_width=True)
+
+# SNÚA TÖFLUNNI VIÐ SVO NÝJASTA SKRÁNINGIN SÉ ALLTAF EFST (loc[::-1])
+if not df.empty:
+    st.dataframe(df.iloc[::-1].reset_index(drop=True), use_container_width=True)
+else:
+    st.dataframe(df, use_container_width=True)
