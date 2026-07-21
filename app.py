@@ -9,6 +9,7 @@ from googleapiclient.http import MediaIoBaseDownload
 import json
 import io
 import math
+import requests
 from datetime import datetime
 
 # --- STILLINGAR ---
@@ -38,40 +39,39 @@ def fa_google_creds():
         pass
     return ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 
-# --- SÆKJA ÖLL GPS HNIT ÚR ÖLLUM GEOJSON SKRÁM Á DRIVE (FYLGI VEGINUM) ---
-def saekja_alla_gps_slod_ur_drive():
-    allir_punktar = []
-    try:
-        creds = fa_google_creds()
-        drive_service = build('drive', 'v3', credentials=creds)
+# --- REIKNA VEGALEIÐ Á MILLI PUNKER (OSRM API) ---
+def saekja_vegaleid(hnit_lista):
+    if len(hnit_lista) < 2:
+        return hnit_lista
+    
+    vegalina = []
+    # Tengjum saman staðina tvo og tvo til að sækja alvöru vegaleið
+    for i in range(len(hnit_lista) - 1):
+        lat1, lon1 = hnit_lista[i]
+        lat2, lon2 = hnit_lista[i+1]
+        
+        # Ef punktarnir eru mjög nálægt hvor öðrum, sleppum API kalli
+        if reikna_fjarlaegd(lat1, lon1, lat2, lon2) < 0.1:
+            vegalina.append([lat1, lon1])
+            continue
+            
+        url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=full&geometries=geojson"
+        try:
+            r = requests.get(url, timeout=3)
+            data = r.json()
+            if "routes" in data and len(data["routes"]) > 0:
+                coords = data["routes"][0]["geometry"]["coordinates"]
+                # OSRM skilar [Lon, Lat], breytum í [Lat, Lon] fyrir Folium
+                path = [[c[1], c[0]] for c in coords]
+                vegalina.extend(path)
+            else:
+                vegalina.extend([[lat1, lon1], [lat2, lon2]])
+        except Exception:
+            vegalina.extend([[lat1, lon1], [lat2, lon2]])
+            
+    return vegalina if vegalina else hnit_lista
 
-        # Sækjum allar skrár úr möppunni sem enda á .geojson
-        query = f"'{GPS_FOLDER_ID}' in parents and trashed = false"
-        results = drive_service.files().list(q=query, fields="files(id, name)", orderBy="name").execute()
-        files = results.get('files', [])
-
-        for file in files:
-            if file['name'].endswith('.geojson'):
-                request = drive_service.files().get_media(fileId=file['id'])
-                fh = io.BytesIO()
-                downloader = MediaIoBaseDownload(fh, request)
-                done = False
-                while not done:
-                    _, done = downloader.next_chunk()
-                fh.seek(0)
-                gogn = json.loads(fh.read().decode('utf-8'))
-                
-                for feature in gogn.get("features", []):
-                    geometry = feature.get("geometry", {})
-                    coords = geometry.get("coordinates", [])
-                    if len(coords) >= 2:
-                        # GeoJSON geymir [Lon, Lat], en Folium vill [Lat, Lon]
-                        allir_punktar.append([coords[1], coords[0]])
-    except Exception:
-        pass
-    return allir_punktar
-
-# --- SJÁLFVIRK GPSLOGGER SINKUN (GOOGLESHEETS) ---
+# --- SJÁLFVIRK GPSLOGGER SINKUN ---
 def athuga_og_uppfaera_gps():
     try:
         creds = fa_google_creds()
@@ -176,16 +176,13 @@ if not df.empty and "Lat" in df.columns and "Lon" in df.columns:
         
         m = folium.Map(location=[sidasta_lat, sidasta_lon], zoom_start=8)
         
-        # 1. TEIKNA NÁKVÆMA AKSTURSLEIÐ ÚR DRIVEOLLUM GEOJSON (BLÁ LÍNA SEM FYLGIR VEGINUM)
-        nákvæm_akstursleid = saekja_alla_gps_slod_ur_drive()
-        if nákvæm_akstursleid:
-            folium.PolyLine(nákvæm_akstursleid, color="blue", weight=5, opacity=0.85).add_to(m)
-        else:
-            # Til vara ef drifið svarar ekki
-            hnit_lista = df_kort[["Lat_num", "Lon_num"]].values.tolist()
-            folium.PolyLine(hnit_lista, color="blue", weight=4, opacity=0.8).add_to(m)
+        # 1. SÆKJA HNIT ÚR GOOGLE SHEETS OG TEIKNA VEGALÍNU SEM FYLGIR VEGINUM
+        grunn_hnit = df_kort[["Lat_num", "Lon_num"]].values.tolist()
+        vegalina_hnit = saekja_vegaleid(grunn_hnit)
         
-        # 2. RAUÐIR PRJÓNAR FYRIR STÖÐVUNARSTAÐI ÚR DAGBÓKINNI
+        folium.PolyLine(vegalina_hnit, color="blue", weight=5, opacity=0.85).add_to(m)
+        
+        # 2. RAUÐIR PRJÓNAR FYRIR ELDRI STAÐI
         for idx, row in df_kort.iloc[:-1].iterrows():
             mynd_html = ""
             if "Mynd" in row and row["Mynd"]:
@@ -234,10 +231,8 @@ if not df.empty and "Lat" in df.columns and "Lon" in df.columns:
 
 st.subheader("📖 Dagbók og veðurskráningar")
 
-# SNÚA TÖFLUNNI VIÐ (NÝJASTA EFST) OG FELA VÍSATÖLUNA (0, 1, 2)
 if not df.empty:
     df_visun = df.drop(columns=["Lat_num", "Lon_num"], errors="ignore")
-    # Fyllum tóm gildi svo þau sýni ekki nan eða 0
     df_visun = df_visun.fillna("")
     st.dataframe(df_visun.iloc[::-1].reset_index(drop=True), use_container_width=True, hide_index=True)
 else:
