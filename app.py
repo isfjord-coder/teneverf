@@ -30,16 +30,12 @@ def reikna_fjarlaegd(lat1, lon1, lat2, lon2):
 # --- TENGING VIÐ GOOGLE SERVICES ---
 def fa_google_creds():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    
-    # Prófum hvort st.secrets sé til staðar (Streamlit Cloud)
     try:
         if hasattr(st, "secrets") and "gcp_service_account" in st.secrets:
             creds_dict = dict(st.secrets["gcp_service_account"])
             return ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    except Exception as e:
+    except Exception:
         pass
-
-    # Ef ekki í Secrets (t.d. keyrt staðbundið á tölvunni), notumcredentials.json
     return ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 
 # --- SJÁLFVIRK GPSLOGGER SINKUN ---
@@ -50,7 +46,6 @@ def athuga_og_uppfaera_gps():
         sheet = client.open(SHEET_NAME).sheet1
         drive_service = build('drive', 'v3', credentials=creds)
 
-        # 1. Sækja nýjustu hnit úr Drive
         dagur_nuna = datetime.now().strftime("%Y%m%d")
         skrar_nafn = f"{dagur_nuna}.geojson"
         
@@ -79,7 +74,6 @@ def athuga_og_uppfaera_gps():
         coords = sidasti_punktur["geometry"]["coordinates"]
         ny_lon, ny_lat = coords[0], coords[1]
 
-        # 2. Samanburður við Sheets
         gogn_sheet = sheet.get_all_records()
         skra_nyja_linu = False
         asteski_stadur = "Á ferðalagi"
@@ -118,7 +112,7 @@ def athuga_og_uppfaera_gps():
             ny_rod = [Dags_str, Klukkan_str, asteski_stadur, "", "", "", "Sjálfvirkt GPS", ny_lat, ny_lon]
             sheet.append_row(ny_rod)
             st.toast("🎉 Nýjum staðsetningarpunkti bætt við í dagbókina!", icon="🚐")
-    except Exception as e:
+    except Exception:
         pass
 
 # Keyrum GPS-athugunina
@@ -143,23 +137,63 @@ if not df.empty and "Lat" in df.columns and "Lon" in df.columns:
     df_kort = df.dropna(subset=["Lat", "Lon"])
 
     if not df_kort.empty:
+        # Nýjasta staðsetningin (síðasta línan)
         sidasta_lat = df_kort.iloc[-1]["Lat"]
         sidasta_lon = df_kort.iloc[-1]["Lon"]
+        sidasti_stadur = df_kort.iloc[-1].get("Staður", "Núverandi staðsetning")
         
-        m = folium.Map(location=[sidasta_lat, sidasta_lon], zoom_start=8)
+        m = folium.Map(location=[sidasta_lat, sidasta_lon], zoom_start=9)
         
+        # Dregur línu á milli punktanna
         hnit_lista = df_kort[["Lat", "Lon"]].values.tolist()
-        folium.PolyLine(hnit_lista, color="red", weight=4, opacity=0.8).add_to(m)
+        folium.PolyLine(hnit_lista, color="#E63946", weight=4, opacity=0.8).add_to(m)
         
-        for idx, row in df_kort.iterrows():
-            popup_text = f"<b>{row.get('Staður', '')}</b><br>{row.get('Dagsetning', '')} kl. {row.get('Klukkan', '')}<br>Hiti: {row.get('Hiti (°C)', '')}°C<br>{row.get('Veðurlýsing', '')}"
+        # Bæta við öllum eldri punktum (Bláir prjónar)
+        for idx, row in df_kort.iloc[:-1].iterrows():
+            mynd_html = ""
+            if "Mynd" in row and row["Mynd"]:
+                mynd_html = f"<br><img src='{row['Mynd']}' width='200px' style='border-radius:8px;'><br>"
+                
+            popup_text = f"""
+            <div style='font-family: sans-serif; min-width: 150px;'>
+                <b>📍 {row.get('Staður', '')}</b><br>
+                📅 {row.get('Dagsetning', '')} kl. {row.get('Klukkan', '')}<br>
+                🌡️ Hiti: {row.get('Hiti (°C)', '')}°C<br>
+                🌤️ {row.get('Veðurlýsing', '')}
+                {mynd_html}
+            </div>
+            """
             folium.Marker(
                 [row["Lat"], row["Lon"]],
                 popup=popup_text,
-                tooltip=row.get('Staður', 'Staður')
+                tooltip=f"{row.get('Staður', '')} ({row.get('Klukkan', '')})",
+                icon=folium.Icon(color="blue", icon="info-sign")
             ).add_to(m)
             
-        st_folium(m, width=1200, height=500)
+        # SÉRSTAKUR AÐSKILINN PRJÓN FYRIR NÚVERANDI STAÐSETNINGU (Grænn húsbíll)
+        nuna_row = df_kort.iloc[-1]
+        mynd_html = ""
+        if "Mynd" in nuna_row and nuna_row["Mynd"]:
+            mynd_html = f"<br><img src='{nuna_row['Mynd']}' width='200px' style='border-radius:8px;'><br>"
+            
+        nuna_popup = f"""
+        <div style='font-family: sans-serif; min-width: 160px;'>
+            <h4 style='margin:0; color:#2A9D8F;'>🚐 Tene er hér núna!</h4>
+            <b>📍 {nuna_row.get('Staður', '')}</b><br>
+            📅 {nuna_row.get('Dagsetning', '')} kl. {nuna_row.get('Klukkan', '')}<br>
+            🌡️ Hiti: {nuna_row.get('Hiti (°C)', '')}°C<br>
+            🌤️ {nuna_row.get('Veðurlýsing', '')}
+            {mynd_html}
+        </div>
+        """
+        folium.Marker(
+            [sidasta_lat, sidasta_lon],
+            popup=nuna_popup,
+            tooltip=f"🚐 HÉR ERUÐ ÞIÐ NÚNA: {sidasti_stadur}",
+            icon=folium.Icon(color="green", icon="fa-bus", prefix="fa")
+        ).add_to(m)
+            
+        st_folium(m, width=1200, height=520)
 
 st.subheader("📖 Dagbók og veðurskráningar")
 st.dataframe(df, use_container_width=True)
