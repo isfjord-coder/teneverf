@@ -45,12 +45,10 @@ def saekja_vegaleid(hnit_lista):
         return hnit_lista
     
     vegalina = []
-    # Tengjum saman staðina tvo og tvo til að sækja alvöru vegaleið
     for i in range(len(hnit_lista) - 1):
         lat1, lon1 = hnit_lista[i]
         lat2, lon2 = hnit_lista[i+1]
         
-        # Ef punktarnir eru mjög nálægt hvor öðrum, sleppum API kalli
         if reikna_fjarlaegd(lat1, lon1, lat2, lon2) < 0.1:
             vegalina.append([lat1, lon1])
             continue
@@ -61,7 +59,6 @@ def saekja_vegaleid(hnit_lista):
             data = r.json()
             if "routes" in data and len(data["routes"]) > 0:
                 coords = data["routes"][0]["geometry"]["coordinates"]
-                # OSRM skilar [Lon, Lat], breytum í [Lat, Lon] fyrir Folium
                 path = [[c[1], c[0]] for c in coords]
                 vegalina.extend(path)
             else:
@@ -153,7 +150,7 @@ athuga_og_uppfaera_gps()
 
 # --- FORRITSVIÐMÓT (STREAMLIT) ---
 st.title("🚐 Tene á ferðalaginu")
-st.markdown("Rauntímakort og veðurdagbók yfir ferðalagið.")
+st.caption("Rauntímakort og veðurdagbók yfir ferðalagið.")
 
 @st.cache_data(ttl=60)
 def saekja_gogn():
@@ -176,25 +173,19 @@ if not df.empty and "Lat" in df.columns and "Lon" in df.columns:
         
         m = folium.Map(location=[sidasta_lat, sidasta_lon], zoom_start=8)
         
-        # 1. SÆKJA HNIT ÚR GOOGLE SHEETS OG TEIKNA VEGALÍNU SEM FYLGIR VEGINUM
+        # VEGALÍNA
         grunn_hnit = df_kort[["Lat_num", "Lon_num"]].values.tolist()
         vegalina_hnit = saekja_vegaleid(grunn_hnit)
-        
         folium.PolyLine(vegalina_hnit, color="blue", weight=5, opacity=0.85).add_to(m)
         
-        # 2. RAUÐIR PRJÓNAR FYRIR ELDRI STAÐI
+        # RAUÐIR PRJÓNAR
         for idx, row in df_kort.iloc[:-1].iterrows():
-            mynd_html = ""
-            if "Mynd" in row and row["Mynd"]:
-                mynd_html = f"<br><img src='{row['Mynd']}' width='200px' style='border-radius:8px;'><br>"
-                
             popup_text = f"""
-            <div style='font-family: sans-serif; min-width: 150px;'>
+            <div style='font-family: sans-serif; min-width: 140px;'>
                 <b>📍 {row.get('Staður', '')}</b><br>
                 📅 {row.get('Dagsetning', '')} kl. {row.get('Klukkan', '')}<br>
                 🌡️ Hiti: {row.get('Hiti (°C)', '')}°C<br>
                 🌤️ {row.get('Veðurlýsing', '')}
-                {mynd_html}
             </div>
             """
             folium.Marker(
@@ -204,20 +195,15 @@ if not df.empty and "Lat" in df.columns and "Lon" in df.columns:
                 icon=folium.Icon(color="red", icon="info-sign")
             ).add_to(m)
             
-        # 3. GRÆNI HÚSBÍLLINN FYRIR NÚVERANDI STAÐSETNINGU
+        # GRÆNI HÚSBÍLLINN
         nuna_row = df_kort.iloc[-1]
-        mynd_html = ""
-        if "Mynd" in nuna_row and nuna_row["Mynd"]:
-            mynd_html = f"<br><img src='{nuna_row['Mynd']}' width='200px' style='border-radius:8px;'><br>"
-            
         nuna_popup = f"""
-        <div style='font-family: sans-serif; min-width: 160px;'>
+        <div style='font-family: sans-serif; min-width: 150px;'>
             <h4 style='margin:0; color:#2A9D8F;'>🚐 Hér erum við núna :-)</h4>
             <b>📍 {nuna_row.get('Staður', '')}</b><br>
             📅 {nuna_row.get('Dagsetning', '')} kl. {nuna_row.get('Klukkan', '')}<br>
             🌡️ Hiti: {nuna_row.get('Hiti (°C)', '')}°C<br>
             🌤️ {nuna_row.get('Veðurlýsing', '')}
-            {mynd_html}
         </div>
         """
         folium.Marker(
@@ -227,7 +213,8 @@ if not df.empty and "Lat" in df.columns and "Lon" in df.columns:
             icon=folium.Icon(color="green", icon="bus", prefix="fa")
         ).add_to(m)
             
-        st_folium(m, width=1200, height=520)
+        # DYNAMIC BREIDD FYRIR SÍMA/TÖLVU
+        st_folium(m, use_container_width=True, height=380)
 
 st.subheader("📖 Dagbók og veðurskráningar")
 
