@@ -28,19 +28,18 @@ def reikna_fjarlaegd(lat1, lon1, lat2, lon2):
     return R * c
 
 # --- TENGING VIÐ GOOGLE SERVICES ---
-# --- TENGING VIÐ GOOGLE SERVICES ---
 def fa_google_creds():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     
-    # 1. Prófum fyrst að sækja úr Secrets (fyrir Streamlit Cloud)
+    # Prófum hvort st.secrets sé til staðar (Streamlit Cloud)
     try:
-        if "gcp_service_account" in st.secrets:
+        if hasattr(st, "secrets") and "gcp_service_account" in st.secrets:
             creds_dict = dict(st.secrets["gcp_service_account"])
             return ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    except Exception:
+    except Exception as e:
         pass
-        
-    # 2. Ef Secrets finnast ekki (eða erum t.d. á tölvunni heima), notum credentials.json
+
+    # Ef ekki í Secrets (t.d. keyrt staðbundið á tölvunni), notumcredentials.json
     return ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 
 # --- SJÁLFVIRK GPSLOGGER SINKUN ---
@@ -120,16 +119,16 @@ def athuga_og_uppfaera_gps():
             sheet.append_row(ny_rod)
             st.toast("🎉 Nýjum staðsetningarpunkti bætt við í dagbókina!", icon="🚐")
     except Exception as e:
-        pass # Hunsar villur hljóðlega ef drifið er tímabundið óaðgengilegt
+        pass
 
-# Keyrum GPS-athugunina í hvert sinn sem síðan hleðst
+# Keyrum GPS-athugunina
 athuga_og_uppfaera_gps()
 
 # --- FORRITSVIÐMÓT (STREAMLIT) ---
 st.title("🚐 Tene á ferðalaginu")
 st.markdown("Rauntímakort og veðurdagbók yfir ferðalagið.")
 
-@st.cache_data(ttl=60) # Athugar með ný gögn úr Sheets á 60 sekúndna fresti
+@st.cache_data(ttl=60)
 def saekja_gogn():
     creds = fa_google_creds()
     client = gspread.authorize(creds)
@@ -139,23 +138,19 @@ def saekja_gogn():
 df = saekja_gogn()
 
 if not df.empty and "Lat" in df.columns and "Lon" in df.columns:
-    # Breytum Lat/Lon í tölugildi
     df["Lat"] = pd.to_numeric(df["Lat"], errors="coerce")
     df["Lon"] = pd.to_numeric(df["Lon"], errors="coerce")
     df_kort = df.dropna(subset=["Lat", "Lon"])
 
     if not df_kort.empty:
-        # Finna miðju korts út frá síðasta punkti
         sidasta_lat = df_kort.iloc[-1]["Lat"]
         sidasta_lon = df_kort.iloc[-1]["Lon"]
         
         m = folium.Map(location=[sidasta_lat, sidasta_lon], zoom_start=8)
         
-        # Búa til línu á milli punktanna (ferðaleiðin)
         hnit_lista = df_kort[["Lat", "Lon"]].values.tolist()
         folium.PolyLine(hnit_lista, color="red", weight=4, opacity=0.8).add_to(m)
         
-        # Setja prjóna á hvern stað
         for idx, row in df_kort.iterrows():
             popup_text = f"<b>{row.get('Staður', '')}</b><br>{row.get('Dagsetning', '')} kl. {row.get('Klukkan', '')}<br>Hiti: {row.get('Hiti (°C)', '')}°C<br>{row.get('Veðurlýsing', '')}"
             folium.Marker(
