@@ -28,14 +28,20 @@ def reikna_fjarlaegd(lat1, lon1, lat2, lon2):
     return R * c
 
 # --- TENGING VIÐ GOOGLE SERVICES ---
+# --- TENGING VIÐ GOOGLE SERVICES ---
 def fa_google_creds():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    # Styðst bæði við local credentials.json og Streamlit Secrets í skýinu
-    if "gcp_service_account" in st.secrets:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        return ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    else:
-        return ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+    
+    # 1. Prófum fyrst að sækja úr Secrets (fyrir Streamlit Cloud)
+    try:
+        if "gcp_service_account" in st.secrets:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            return ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    except Exception:
+        pass
+        
+    # 2. Ef Secrets finnast ekki (eða erum t.d. á tölvunni heima), notum credentials.json
+    return ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 
 # --- SJÁLFVIRK GPSLOGGER SINKUN ---
 def athuga_og_uppfaera_gps():
